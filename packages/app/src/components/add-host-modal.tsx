@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useReducer, useState } from "react";
+import { useCallback, useMemo, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Alert, Platform, Pressable, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Link2 } from "lucide-react-native";
-import type { HostProfile } from "@/types/host-connection";
+import type { DirectTcpHostConnection, HostProfile } from "@/types/host-connection";
 import { useHosts, useHostMutations } from "@/runtime/host-runtime";
 import {
   parseConnectionUri,
@@ -14,6 +14,14 @@ import {
 import { DaemonConnectionTestError } from "@/utils/test-daemon-connection";
 import { AdaptiveModalSheet, AdaptiveTextInput, type SheetHeader } from "./adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
+import { useFilePicker } from "@/hooks/use-file-picker";
+import { getFileExtension } from "@/attachments/file-types";
+import {
+  deleteMtlsIdentity,
+  importMtlsPkcs12Identity,
+  isMtlsWebSocketAvailable,
+  type MtlsIdentityMetadata,
+} from "@/native/ios-mtls-websocket";
 
 const FLEX_ONE_STYLE = { flex: 1 } as const;
 
@@ -22,6 +30,7 @@ interface DirectConnectionDraft {
   port: string;
   useTls: boolean;
   password: string;
+  mtls?: DirectTcpHostConnection["mtls"];
 }
 
 interface PreparedDirectConnection {
@@ -29,6 +38,7 @@ interface PreparedDirectConnection {
   endpoint: string;
   useTls: boolean;
   password?: string;
+  mtls?: DirectTcpHostConnection["mtls"];
 }
 
 interface DirectConnectionLabels {
@@ -123,6 +133,28 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
+  certificateActions: {
+    flexDirection: "row",
+    gap: theme.spacing[2],
+    flexWrap: "wrap",
+  },
+  certificateCard: {
+    gap: theme.spacing[2],
+    padding: theme.spacing[3],
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  certificateTitle: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  certificateDetail: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
   actions: {
     flexDirection: "row",
     gap: theme.spacing[3],
@@ -178,7 +210,13 @@ function prepareDirectConnection(
     endpoint,
     useTls: parsed.useTls,
     ...(parsed.password ? { password: parsed.password } : {}),
+    ...(draft.mtls ? { mtls: draft.mtls } : {}),
   };
+}
+
+function isPkcs12FileName(fileName: string): boolean {
+  const extension = getFileExtension(fileName);
+  return extension === ".p12" || extension === ".pfx";
 }
 
 function draftFromConnectionUri(uri: string): DirectConnectionDraft {
@@ -294,6 +332,7 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
   const { t } = useTranslation();
   const daemons = useHosts();
   const { probeAndUpsertDirectConnection } = useHostMutations();
+  const { pickFiles } = useFilePicker();
   const isMobile = useIsCompactFormFactor();
 
   const [isSaving, setIsSaving] = useState(false);
@@ -303,9 +342,16 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
   const [useTls, setUseTls] = useState(false);
   const [password, setPassword] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [useMtls, setUseMtls] = useState(false);
+  const [pkcs12Password, setPkcs12Password] = useState("");
+  const [importedMtlsIdentity, setImportedMtlsIdentity] = useState<MtlsIdentityMetadata | null>(null);
+  const [isImportingCertificate, setIsImportingCertificate] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [advancedUri, setAdvancedUri] = useState("");
   const [inputResetKey, bumpInputResetKey] = useReducer((key: number) => key + 1, 0);
+  const importedMtlsIdentityIdsRef = useRef<string[]>([]);
+
+  const isMtlsUiAvailable = Platform.OS === "ios" && isMtlsWebSocketAvailable();
 
   const clearInput = useCallback(() => {
     setHost("");
@@ -313,10 +359,37 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
     setUseTls(false);
     setPassword("");
     setIsPasswordVisible(false);
+    setUseMtls(false);
+    setPkcs12Password("");
+    setImportedMtlsIdentity(null);
+    setIsImportingCertificate(false);
     setIsAdvancedOpen(false);
     setAdvancedUri("");
     bumpInputResetKey();
   }, []);
+
+  const cleanupDraftMtlsIdentities = useCallback(async (preserveIdentityId?: string | null) => {
+    const trackedIdentityIds = [...new Set(importedMtlsIdentityIdsRef.current)];
+    importedMtlsIdentityIdsRef.current = [];
+    if (trackedIdentityIds.length === 0) {
+      return;
+    }
+    await Promise.allSettled(
+      trackedIdentityIds
+        .filter((identityId) => identityId !== preserveIdentityId)
+        .map((identityId) => deleteMtlsIdentity(identityId)),
+    );
+  }, []);
+
+  const resetDraftAndClose = useCallback(
+    async (preserveIdentityId?: string | null, close: () => void = onClose) => {
+      await cleanupDraftMtlsIdentities(preserveIdentityId);
+      clearInput();
+      setErrorMessage("");
+      close();
+    },
+    [cleanupDraftMtlsIdentities, clearInput, onClose],
+  );
 
   const connectIcon = useMemo(
     () => <Link2 size={16} color={theme.colors.accentForeground} />,
@@ -353,17 +426,13 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
 
   const handleClose = useCallback(() => {
     if (isSaving) return;
-    clearInput();
-    setErrorMessage("");
-    onClose();
-  }, [isSaving, clearInput, onClose]);
+    void resetDraftAndClose();
+  }, [isSaving, resetDraftAndClose]);
 
   const handleCancel = useCallback(() => {
     if (isSaving) return;
-    clearInput();
-    setErrorMessage("");
-    (onCancel ?? onClose)();
-  }, [isSaving, clearInput, onCancel, onClose]);
+    void resetDraftAndClose(null, onCancel ?? onClose);
+  }, [isSaving, onCancel, onClose, resetDraftAndClose]);
 
   const handleSave = useCallback(async () => {
     if (isSaving) return;
@@ -371,13 +440,32 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
     let connection: PreparedDirectConnection;
     try {
       connection = prepareDirectConnection(
-        { host, port, useTls, password },
+        {
+          host,
+          port,
+          useTls,
+          password,
+          ...(useMtls && importedMtlsIdentity ? { mtls: importedMtlsIdentity } : {}),
+        },
         directConnectionLabels,
       );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : directConnectionLabels.invalidConnection;
       setErrorMessage(message);
+      return;
+    }
+
+    if (useMtls && !isMtlsUiAvailable) {
+      setErrorMessage("Client certificates are only available in the iOS app.");
+      return;
+    }
+    if (useMtls && !useTls) {
+      setErrorMessage("Client certificates require TLS.");
+      return;
+    }
+    if (useMtls && !importedMtlsIdentity) {
+      setErrorMessage("Import a .p12 or .pfx client certificate before connecting.");
       return;
     }
 
@@ -389,11 +477,12 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
         endpoint: connection.endpoint,
         useTls: connection.useTls,
         ...(connection.password ? { password: connection.password } : {}),
+        ...(connection.mtls ? { mtls: connection.mtls } : {}),
       });
       const isNewHost = !daemons.some((daemon) => daemon.serverId === serverId);
 
       onSaved?.({ profile, serverId, hostname, isNewHost });
-      handleClose();
+      await resetDraftAndClose(importedMtlsIdentity?.identityId ?? null);
     } catch (error) {
       const {
         title,
@@ -424,15 +513,18 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
   }, [
     daemons,
     directConnectionLabels,
-    handleClose,
     host,
+    importedMtlsIdentity,
     isMobile,
+    isMtlsUiAvailable,
     isSaving,
     onSaved,
     password,
     port,
     probeAndUpsertDirectConnection,
+    resetDraftAndClose,
     t,
+    useMtls,
     useTls,
   ]);
 
@@ -446,12 +538,102 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
 
   const handleToggleUseTls = useCallback(() => {
     if (isSaving) return;
-    setUseTls((current) => !current);
-  }, [isSaving]);
+    setUseTls((current) => {
+      const next = !current;
+      if (!next) {
+        setUseMtls(false);
+        setPkcs12Password("");
+        setImportedMtlsIdentity(null);
+        void cleanupDraftMtlsIdentities();
+      }
+      return next;
+    });
+  }, [cleanupDraftMtlsIdentities, isSaving]);
 
   const handleTogglePasswordVisibility = useCallback(() => {
     setIsPasswordVisible((current) => !current);
   }, []);
+
+  const handleToggleUseMtls = useCallback(() => {
+    if (isSaving || isImportingCertificate) {
+      return;
+    }
+    setUseMtls((current) => {
+      const next = !current;
+      if (!next) {
+        setPkcs12Password("");
+        setImportedMtlsIdentity(null);
+        void cleanupDraftMtlsIdentities();
+      }
+      return next;
+    });
+  }, [cleanupDraftMtlsIdentities, isImportingCertificate, isSaving]);
+
+  const handleImportMtlsCertificate = useCallback(async () => {
+    if (!isMtlsUiAvailable || isSaving || isImportingCertificate) {
+      return;
+    }
+    const trimmedPassword = pkcs12Password.trim();
+    if (!trimmedPassword) {
+      setErrorMessage("Enter the PKCS#12 password before importing.");
+      return;
+    }
+    const selection = await pickFiles();
+    const file = selection?.[0] ?? null;
+    if (!file) {
+      return;
+    }
+    if ((selection?.length ?? 0) !== 1 || !isPkcs12FileName(file.fileName)) {
+      setErrorMessage("Choose a .p12 or .pfx client certificate file.");
+      return;
+    }
+
+    try {
+      setIsImportingCertificate(true);
+      setErrorMessage("");
+      const identity = await importMtlsPkcs12Identity({
+        bytes: file.bytes,
+        password: trimmedPassword,
+        fileName: file.fileName,
+      });
+      importedMtlsIdentityIdsRef.current.push(identity.identityId);
+      if (importedMtlsIdentity?.identityId) {
+        importedMtlsIdentityIdsRef.current = importedMtlsIdentityIdsRef.current.filter(
+          (identityId) => identityId !== importedMtlsIdentity.identityId,
+        );
+        await deleteMtlsIdentity(importedMtlsIdentity.identityId).catch(() => undefined);
+      }
+      setImportedMtlsIdentity(identity);
+      setUseMtls(true);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to import the client certificate.");
+    } finally {
+      setIsImportingCertificate(false);
+    }
+  }, [
+    importedMtlsIdentity,
+    isImportingCertificate,
+    isMtlsUiAvailable,
+    isSaving,
+    pickFiles,
+    pkcs12Password,
+  ]);
+
+  const handleRemoveMtlsCertificate = useCallback(async () => {
+    if (!importedMtlsIdentity || isSaving || isImportingCertificate) {
+      return;
+    }
+    const identityId = importedMtlsIdentity.identityId;
+    importedMtlsIdentityIdsRef.current = importedMtlsIdentityIdsRef.current.filter(
+      (candidateId) => candidateId !== identityId,
+    );
+    setImportedMtlsIdentity(null);
+    try {
+      await deleteMtlsIdentity(identityId);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to remove the client certificate.");
+    }
+  }, [importedMtlsIdentity, isImportingCertificate, isSaving]);
 
   const handleToggleAdvanced = useCallback(() => {
     if (!isAdvancedOpen) {
@@ -593,6 +775,87 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
           </Pressable>
         </View>
       </View>
+
+      {useTls && isMtlsUiAvailable ? (
+        <View style={styles.field}>
+          <Pressable
+            style={styles.checkboxRow}
+            onPress={handleToggleUseMtls}
+            disabled={isSaving || isImportingCertificate}
+            accessibilityRole="checkbox"
+            accessibilityLabel="Use client certificate"
+            accessibilityState={{ checked: useMtls, disabled: isSaving || isImportingCertificate }}
+            testID="direct-mtls-toggle"
+          >
+            <View style={[styles.checkbox, useMtls ? styles.checkboxChecked : null]}>
+              {useMtls ? <Check size={14} color={theme.colors.accentForeground} /> : null}
+            </View>
+            <Text style={styles.label}>Use client certificate</Text>
+          </Pressable>
+          {useMtls ? (
+            <>
+              <Text style={styles.helper}>
+                Import a PKCS#12 (.p12 or .pfx) client certificate for mutual TLS.
+              </Text>
+              <AdaptiveTextInput
+                testID="direct-mtls-password-input"
+                nativeID="direct-mtls-password-input"
+                accessibilityLabel="Certificate password"
+                initialValue={pkcs12Password}
+                resetKey={`direct-mtls-password-${inputResetKey}`}
+                value={pkcs12Password}
+                onChangeText={setPkcs12Password}
+                placeholder="Certificate password"
+                placeholderTextColor={theme.colors.foregroundMuted}
+                style={styles.input}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+                editable={!isSaving && !isImportingCertificate}
+                returnKeyType="done"
+              />
+              <View style={styles.certificateActions}>
+                <Button
+                  variant="secondary"
+                  onPress={() => {
+                    void handleImportMtlsCertificate();
+                  }}
+                  disabled={isSaving || isImportingCertificate}
+                  testID="direct-mtls-import"
+                >
+                  {importedMtlsIdentity ? "Replace .p12" : "Import .p12"}
+                </Button>
+                {importedMtlsIdentity ? (
+                  <Button
+                    variant="secondary"
+                    onPress={() => {
+                      void handleRemoveMtlsCertificate();
+                    }}
+                    disabled={isSaving || isImportingCertificate}
+                    testID="direct-mtls-remove"
+                  >
+                    Remove certificate
+                  </Button>
+                ) : null}
+              </View>
+              {importedMtlsIdentity ? (
+                <View style={styles.certificateCard}>
+                  <Text style={styles.certificateTitle}>Imported certificate</Text>
+                  {importedMtlsIdentity.displayName ? (
+                    <Text style={styles.certificateDetail}>{importedMtlsIdentity.displayName}</Text>
+                  ) : null}
+                  {importedMtlsIdentity.subjectSummary ? (
+                    <Text style={styles.certificateDetail}>{importedMtlsIdentity.subjectSummary}</Text>
+                  ) : null}
+                  {importedMtlsIdentity.expiresAt ? (
+                    <Text style={styles.certificateDetail}>Expires {importedMtlsIdentity.expiresAt}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </View>
+      ) : null}
 
       <View style={styles.field}>
         <Pressable

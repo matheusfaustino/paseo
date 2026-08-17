@@ -12,6 +12,7 @@ import {
   buildLocalDaemonTransportUrl,
   createDesktopLocalDaemonTransportFactory,
 } from "@/desktop/daemon/desktop-daemon-transport";
+import { createIosMtlsTransportFactory } from "@/runtime/ios-mtls-websocket-transport";
 
 export interface DaemonProbeClient {
   readonly lastError: string | null;
@@ -29,6 +30,9 @@ export interface DaemonConnectionDependencies<TClient extends DaemonProbeClient>
   getClientId(): Promise<string>;
   resolveAppVersion(): string | null;
   createLocalTransportFactory(): DaemonClientConfig["transportFactory"] | null;
+  createDirectTcpMtlsTransportFactory(
+    identityId: string,
+  ): DaemonClientConfig["transportFactory"] | null;
   buildLocalTransportUrl(input: LocalTransportUrlInput): string;
   createClient(config: DaemonClientConfig): TClient;
 }
@@ -37,6 +41,7 @@ const defaultDaemonConnectionDependencies: DaemonConnectionDependencies<DaemonCl
   getClientId: getOrCreateClientId,
   resolveAppVersion,
   createLocalTransportFactory: createDesktopLocalDaemonTransportFactory,
+  createDirectTcpMtlsTransportFactory: createIosMtlsTransportFactory,
   buildLocalTransportUrl: buildLocalDaemonTransportUrl,
   createClient: (config) => new DaemonClient(config),
 };
@@ -103,7 +108,11 @@ export async function buildClientConfig(
   },
   deps: Pick<
     DaemonConnectionDependencies<DaemonProbeClient>,
-    "getClientId" | "resolveAppVersion" | "createLocalTransportFactory" | "buildLocalTransportUrl"
+    | "getClientId"
+    | "resolveAppVersion"
+    | "createLocalTransportFactory"
+    | "createDirectTcpMtlsTransportFactory"
+    | "buildLocalTransportUrl"
   > = defaultDaemonConnectionDependencies,
 ): Promise<DaemonClientConfig> {
   const clientId = await deps.getClientId();
@@ -133,8 +142,15 @@ export async function buildClientConfig(
   }
 
   if (connection.type === "directTcp") {
+    const mtlsTransportFactory = connection.mtls
+      ? deps.createDirectTcpMtlsTransportFactory(connection.mtls.identityId)
+      : null;
+    if (connection.mtls && !mtlsTransportFactory) {
+      throw new Error("mTLS direct connections are only available on iOS native builds");
+    }
     return {
       ...base,
+      ...(mtlsTransportFactory ? { transportFactory: mtlsTransportFactory } : {}),
       url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
       ...(connection.password ? { password: connection.password } : {}),
     };

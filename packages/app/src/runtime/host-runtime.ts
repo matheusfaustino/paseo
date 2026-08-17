@@ -13,6 +13,7 @@ import {
   upsertHostConnectionInProfiles,
   registryHasConnection,
   StoredHostRegistrySchema,
+  type DirectTcpHostConnection,
   type HostConnection,
   type HostProfile,
 } from "@/types/host-connection";
@@ -62,6 +63,8 @@ import { DirectorySync, type RefreshAgentDirectoryResult } from "@/runtime/direc
 import { ReplicaCache } from "@/runtime/replica-cache";
 import { nativePerformanceTrace } from "@/performance/native-trace";
 import { revokePushNotifications } from "@/push-notifications";
+import { deleteMtlsIdentity } from "@/native/ios-mtls-websocket";
+import { createIosMtlsTransportFactory } from "./ios-mtls-websocket-transport";
 import { createAppWebSocketFactory } from "./websocket-factory";
 
 export type HostRuntimeConnectionStatus = "idle" | "connecting" | "online" | "offline" | "error";
@@ -186,6 +189,43 @@ const ADAPTIVE_SWITCH_THRESHOLD_MS = 40;
 const ADAPTIVE_SWITCH_CONSECUTIVE_PROBES = 3;
 const DEFAULT_AGENT_DIRECTORY_PAGE_LIMIT = 200;
 const CONFIGURED_OVERRIDE_BOOTSTRAP_RETRY_MS = 1_000;
+
+function collectMtlsIdentityIds(hosts: readonly HostProfile[]): Set<string> {
+  const identities = new Set<string>();
+  for (const host of hosts) {
+    for (const connection of host.connections) {
+      if (connection.type === "directTcp" && connection.mtls?.identityId) {
+        identities.add(connection.mtls.identityId);
+      }
+    }
+  }
+  return identities;
+}
+
+async function cleanupRemovedMtlsIdentities(
+  previousHosts: readonly HostProfile[],
+  nextHosts: readonly HostProfile[],
+): Promise<void> {
+  const nextIdentityIds = collectMtlsIdentityIds(nextHosts);
+  const removedIdentityIds = [...collectMtlsIdentityIds(previousHosts)].filter(
+    (identityId) => !nextIdentityIds.has(identityId),
+  );
+  if (removedIdentityIds.length === 0) {
+    return;
+  }
+  const results = await Promise.allSettled(
+    removedIdentityIds.map((identityId) => deleteMtlsIdentity(identityId)),
+  );
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.warn(
+        "[HostRuntime] Failed to delete removed mTLS identity",
+        removedIdentityIds[index],
+        result.reason,
+      );
+    }
+  });
+}
 
 function toActiveConnection(connection: HostConnection): ActiveConnection {
   if (connection.type === "directSocket") {
@@ -505,9 +545,15 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         });
       }
       if (connection.type === "directTcp") {
+        const mtlsTransportFactory = connection.mtls
+          ? createIosMtlsTransportFactory(connection.mtls.identityId)
+          : null;
+        if (connection.mtls && !mtlsTransportFactory) {
+          throw new Error("mTLS direct connections are only available on iOS native builds");
+        }
         return new DaemonClient({
           ...base,
-          ...webSocketConfig,
+          ...(mtlsTransportFactory ? { transportFactory: mtlsTransportFactory } : webSocketConfig),
           url: buildDaemonWebSocketUrl(connection.endpoint, {
             useTls: connection.useTls ?? false,
           }),
@@ -1649,9 +1695,9 @@ export class HostRuntimeStore {
     );
     this.emitHostList();
     this.emit(newServerId);
-    void this.persistHosts().catch((error) =>
-      console.error("[HostRuntime] Failed to persist host registry", error),
-    );
+    void this.persistHosts().catch((error) => {
+      console.error("[HostRuntime] Failed to persist host registry", error);
+    });
   }
 
   async upsertDirectConnection(input: {
@@ -1660,10 +1706,14 @@ export class HostRuntimeStore {
     useTls?: boolean;
     password?: string;
     label?: string;
+    mtls?: DirectTcpHostConnection["mtls"];
     existingClient?: DaemonClient;
   }): Promise<HostProfile> {
     const endpoint = normalizeHostPort(input.endpoint);
     const password = input.password?.trim();
+    if (input.mtls && input.useTls !== true) {
+      throw new Error("mTLS direct connections require TLS");
+    }
     return this.upsertHostConnection({
       serverId: input.serverId,
       label: input.label,
@@ -1673,6 +1723,7 @@ export class HostRuntimeStore {
         endpoint,
         useTls: input.useTls ?? false,
         ...(password ? { password } : {}),
+        ...(input.mtls ? { mtls: input.mtls } : {}),
       },
       existingClient: input.existingClient,
     });
@@ -1715,9 +1766,13 @@ export class HostRuntimeStore {
     useTls?: boolean;
     password?: string;
     label?: string;
+    mtls?: DirectTcpHostConnection["mtls"];
   }): Promise<{ profile: HostProfile; serverId: string; hostname: string | null }> {
     const endpoint = normalizeHostPort(input.endpoint);
     const password = input.password?.trim();
+    if (input.mtls && input.useTls !== true) {
+      throw new Error("mTLS direct connections require TLS");
+    }
     return this.probeAndUpsertConnection({
       label: input.label,
       connection: {
@@ -1726,6 +1781,7 @@ export class HostRuntimeStore {
         endpoint,
         useTls: input.useTls ?? false,
         ...(password ? { password } : {}),
+        ...(input.mtls ? { mtls: input.mtls } : {}),
       },
     });
   }
@@ -1812,12 +1868,14 @@ export class HostRuntimeStore {
     serverId: string,
     apply: (host: HostProfile) => HostProfile,
   ): Promise<void> {
+    const previousHosts = this.hosts;
     const updatedAt = new Date().toISOString();
     const next = this.hosts.map((host) =>
       host.serverId === serverId ? { ...apply(host), updatedAt } : host,
     );
     this.setHostsAndSync(next);
     await this.persistHosts();
+    await cleanupRemovedMtlsIdentities(previousHosts, next);
   }
 
   async renameHost(serverId: string, label: string): Promise<void> {
@@ -1863,12 +1921,15 @@ export class HostRuntimeStore {
 
   async removeHost(serverId: string): Promise<void> {
     await this.revokePushNotifications({ client: this.getClient(serverId), serverId });
+    const previousHosts = this.hosts;
     const remaining = this.hosts.filter((daemon) => daemon.serverId !== serverId);
     this.setHostsAndSync(remaining);
     await this.persistHosts();
+    await cleanupRemovedMtlsIdentities(previousHosts, remaining);
   }
 
   async removeConnection(serverId: string, connectionId: string): Promise<void> {
+    const previousHosts = this.hosts;
     const host = this.hosts.find((candidate) => candidate.serverId === serverId);
     if (host?.connections.length === 1 && host.connections[0]?.id === connectionId) {
       await this.removeHost(serverId);
@@ -1896,6 +1957,7 @@ export class HostRuntimeStore {
       .filter((entry): entry is HostProfile => entry !== null);
     this.setHostsAndSync(next);
     await this.persistHosts();
+    await cleanupRemovedMtlsIdentities(previousHosts, next);
   }
 
   private async upsertHostConnection(input: {
@@ -1905,6 +1967,7 @@ export class HostRuntimeStore {
     existingClient?: DaemonClient;
   }): Promise<HostProfile> {
     const now = new Date().toISOString();
+    const previousHosts = this.hosts;
     const next = upsertHostConnectionInProfiles({
       profiles: this.hosts,
       serverId: input.serverId,
@@ -1925,9 +1988,11 @@ export class HostRuntimeStore {
           ])
         : undefined,
     });
-    void this.persistHosts().catch((error) =>
-      console.error("[HostRuntime] Failed to persist host registry", error),
-    );
+    void this.persistHosts()
+      .then(() => cleanupRemovedMtlsIdentities(previousHosts, next))
+      .catch((error) => {
+        console.error("[HostRuntime] Failed to persist host registry", error);
+      });
     const profile = next.find((daemon) => daemon.serverId === input.serverId);
     if (!profile) {
       throw new Error(`Host ${input.serverId} was not inserted`);
@@ -2471,12 +2536,14 @@ export interface HostMutations {
     useTls?: boolean;
     password?: string;
     label?: string;
+    mtls?: DirectTcpHostConnection["mtls"];
   }) => Promise<HostProfile>;
   probeAndUpsertDirectConnection: (input: {
     endpoint: string;
     useTls?: boolean;
     password?: string;
     label?: string;
+    mtls?: DirectTcpHostConnection["mtls"];
   }) => Promise<{ profile: HostProfile; serverId: string; hostname: string | null }>;
   upsertRelayConnection: (input: {
     serverId: string;

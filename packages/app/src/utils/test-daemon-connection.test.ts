@@ -44,6 +44,7 @@ class FakeDaemonProbe {
     },
     resolveAppVersion: () => null,
     createLocalTransportFactory: () => null,
+    createDirectTcpMtlsTransportFactory: () => null,
     buildLocalTransportUrl: ({ transportType, transportPath }) =>
       `paseo+local://${transportType}?path=${encodeURIComponent(transportPath)}`,
     createClient: (config) => {
@@ -138,6 +139,67 @@ describe("test-daemon-connection connectToDaemon", () => {
     await result.client.close();
 
     expect(probe.createdConfigs()[0]?.url).toBe("paseo+local://socket?path=%2Ftmp%2Fpaseo.sock");
+  });
+
+  it("routes direct TCP mTLS probes through the dedicated transport factory", async () => {
+    const { connectToDaemon } = await import("./test-daemon-connection");
+    const mtlsTransportFactory = (() => ({
+      send() {},
+      close() {},
+      onMessage: () => () => {},
+      onOpen: () => () => {},
+      onClose: () => () => {},
+      onError: () => () => {},
+    })) as NonNullable<DaemonClientConfig["transportFactory"]>;
+    const result = await connectToDaemon(
+      {
+        id: "direct:lan:443",
+        type: "directTcp",
+        endpoint: "lan:443",
+        useTls: true,
+        mtls: {
+          identityId: "identity-1",
+          importedAt: "2026-08-13T00:00:00.000Z",
+        },
+      },
+      undefined,
+      {
+        ...probe.deps,
+        createDirectTcpMtlsTransportFactory: (identityId) => {
+          expect(identityId).toBe("identity-1");
+          return mtlsTransportFactory;
+        },
+      },
+    );
+    await result.client.close();
+
+    expect(probe.createdConfigs()[0]?.transportFactory).toBe(mtlsTransportFactory);
+  });
+
+  it("fails fast when a direct TCP mTLS connection runs without native support", async () => {
+    const { connectToDaemon } = await import("./test-daemon-connection");
+
+    await expect(
+      connectToDaemon(
+        {
+          id: "direct:lan:443",
+          type: "directTcp",
+          endpoint: "lan:443",
+          useTls: true,
+          mtls: {
+            identityId: "identity-1",
+            importedAt: "2026-08-13T00:00:00.000Z",
+          },
+        },
+        undefined,
+        {
+          ...probe.deps,
+          createDirectTcpMtlsTransportFactory: () => null,
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: "mTLS direct connections are only available on iOS native builds",
+    });
   });
 
   it("passes direct TCP connection passwords into the client config", async () => {

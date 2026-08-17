@@ -4,6 +4,7 @@ import {
 } from "@getpaseo/protocol/daemon-endpoints";
 import {
   DirectTcpHostConnectionSchema,
+  DirectTcpMtlsConfigSchema,
   type DirectTcpHostConnection,
 } from "@getpaseo/protocol/host-connection-schema";
 import {
@@ -105,6 +106,25 @@ export function resolveActiveHostServerId(params: {
   );
 }
 
+function directTcpMtlsEquals(
+  left: DirectTcpHostConnection["mtls"],
+  right: DirectTcpHostConnection["mtls"],
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.identityId === right.identityId &&
+    left.displayName === right.displayName &&
+    left.subjectSummary === right.subjectSummary &&
+    left.expiresAt === right.expiresAt &&
+    left.importedAt === right.importedAt
+  );
+}
+
 function hostConnectionEquals(left: HostConnection, right: HostConnection): boolean {
   if (left.type !== right.type || left.id !== right.id) {
     return false;
@@ -114,7 +134,8 @@ function hostConnectionEquals(left: HostConnection, right: HostConnection): bool
     return (
       left.endpoint === right.endpoint &&
       (left.useTls ?? false) === (right.useTls ?? false) &&
-      left.password === right.password
+      left.password === right.password &&
+      directTcpMtlsEquals(left.mtls, right.mtls)
     );
   }
   if (left.type === "directSocket" && right.type === "directSocket") {
@@ -301,6 +322,7 @@ const StoredHostConnectionSchema = z.discriminatedUnion("type", [
     endpoint: z.string(),
     useTls: z.boolean().optional(),
     password: z.string().optional(),
+    mtls: DirectTcpMtlsConfigSchema.optional(),
   }),
   z.strictObject({
     id: z.string().optional(),
@@ -343,6 +365,7 @@ function normalizeStoredConnection(connection: StoredHostConnection): HostConnec
         endpoint,
         useTls: connection.useTls,
         ...(connection.password !== undefined ? { password: connection.password } : {}),
+        ...(connection.mtls !== undefined ? { mtls: connection.mtls } : {}),
       });
     } catch {
       return null;
