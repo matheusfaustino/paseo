@@ -99,6 +99,28 @@ export class DaemonConnectionTestError extends Error {
   }
 }
 
+function buildDirectTcpClientConfig(
+  connection: Extract<HostConnection, { type: "directTcp" }>,
+  base: Record<string, unknown>,
+  deps: Pick<
+    DaemonConnectionDependencies<DaemonProbeClient>,
+    "createDirectTcpMtlsTransportFactory"
+  >,
+): DaemonClientConfig {
+  const mtlsTransportFactory = connection.mtls
+    ? deps.createDirectTcpMtlsTransportFactory(connection.mtls.identityId)
+    : null;
+  if (connection.mtls && !mtlsTransportFactory) {
+    throw new Error("mTLS direct connections are only available on iOS native builds");
+  }
+  return {
+    ...base,
+    ...(mtlsTransportFactory ? { transportFactory: mtlsTransportFactory } : {}),
+    url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
+    ...(connection.password ? { password: connection.password } : {}),
+  } as DaemonClientConfig;
+}
+
 export async function buildClientConfig(
   connection: HostConnection,
   serverId?: string,
@@ -142,18 +164,7 @@ export async function buildClientConfig(
   }
 
   if (connection.type === "directTcp") {
-    const mtlsTransportFactory = connection.mtls
-      ? deps.createDirectTcpMtlsTransportFactory(connection.mtls.identityId)
-      : null;
-    if (connection.mtls && !mtlsTransportFactory) {
-      throw new Error("mTLS direct connections are only available on iOS native builds");
-    }
-    return {
-      ...base,
-      ...(mtlsTransportFactory ? { transportFactory: mtlsTransportFactory } : {}),
-      url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
-      ...(connection.password ? { password: connection.password } : {}),
-    };
+    return buildDirectTcpClientConfig(connection, base, deps);
   }
 
   if (!serverId) {

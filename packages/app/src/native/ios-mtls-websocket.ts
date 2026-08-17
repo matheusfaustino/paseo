@@ -50,7 +50,9 @@ export function isMtlsWebSocketAvailable(): boolean {
   return false;
 }
 
-export async function importMtlsPkcs12Identity(_input: MtlsPkcs12ImportInput): Promise<MtlsIdentityMetadata> {
+export async function importMtlsPkcs12Identity(
+  _input: MtlsPkcs12ImportInput,
+): Promise<MtlsIdentityMetadata> {
   throw new Error("Client certificate import is only available on iOS native builds");
 }
 
@@ -58,7 +60,9 @@ export async function deleteMtlsIdentity(_identityId: string): Promise<void> {
   throw new Error("Client certificate management is only available on iOS native builds");
 }
 
-export async function getMtlsIdentityMetadata(_identityId: string): Promise<MtlsIdentityMetadata | null> {
+export async function getMtlsIdentityMetadata(
+  _identityId: string,
+): Promise<MtlsIdentityMetadata | null> {
   return null;
 }
 
@@ -74,11 +78,17 @@ export async function sendMtlsSocketBinary(_socketId: string, _base64: string): 
   throw new Error("mTLS direct connections are only available on iOS native builds");
 }
 
-export async function closeMtlsSocket(_socketId: string, _code?: number, _reason?: string): Promise<void> {
+export async function closeMtlsSocket(
+  _socketId: string,
+  _code?: number,
+  _reason?: string,
+): Promise<void> {
   throw new Error("mTLS direct connections are only available on iOS native builds");
 }
 
-export function addMtlsSocketOpenListener(_handler: (event: MtlsSocketOpenEvent) => void): EventSubscription {
+export function addMtlsSocketOpenListener(
+  _handler: (event: MtlsSocketOpenEvent) => void,
+): EventSubscription {
   return createNoopSubscription();
 }
 

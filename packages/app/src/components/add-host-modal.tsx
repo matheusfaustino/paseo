@@ -315,6 +315,181 @@ function buildConnectionFailureCopy(input: {
   return { title, detail, raw };
 }
 
+function validateMtlsSelection(input: {
+  useMtls: boolean;
+  useTls: boolean;
+  isMtlsUiAvailable: boolean;
+  importedMtlsIdentity: MtlsIdentityMetadata | null;
+}): string | null {
+  if (!input.useMtls) return null;
+  if (!input.isMtlsUiAvailable) return "Client certificates are only available in the iOS app.";
+  if (!input.useTls) return "Client certificates require TLS.";
+  if (!input.importedMtlsIdentity) {
+    return "Import a .p12 or .pfx client certificate before connecting.";
+  }
+  return null;
+}
+
+function combineConnectionFailureMessage(
+  title: string,
+  detail: string | null,
+  raw: string | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (raw && detail && raw !== detail) {
+    return `${title}\n${detail}\n${t("pairing.direct.errors.details", { detail: raw })}`;
+  }
+  if (detail) {
+    return `${title}\n${detail}`;
+  }
+  return title;
+}
+
+interface MtlsCertificateFieldsProps {
+  theme: ReturnType<typeof useUnistyles>["theme"];
+  pkcs12Password: string;
+  onChangePkcs12Password: (value: string) => void;
+  inputResetKey: number;
+  editable: boolean;
+  disabled: boolean;
+  importedMtlsIdentity: MtlsIdentityMetadata | null;
+  onImport: () => void;
+  onRemove: () => void;
+}
+
+function MtlsCertificateFields({
+  theme,
+  pkcs12Password,
+  onChangePkcs12Password,
+  inputResetKey,
+  editable,
+  disabled,
+  importedMtlsIdentity,
+  onImport,
+  onRemove,
+}: MtlsCertificateFieldsProps) {
+  return (
+    <>
+      <Text style={styles.helper}>
+        Import a PKCS#12 (.p12 or .pfx) client certificate for mutual TLS.
+      </Text>
+      <AdaptiveTextInput
+        testID="direct-mtls-password-input"
+        nativeID="direct-mtls-password-input"
+        accessibilityLabel="Certificate password"
+        initialValue={pkcs12Password}
+        resetKey={`direct-mtls-password-${inputResetKey}`}
+        value={pkcs12Password}
+        onChangeText={onChangePkcs12Password}
+        placeholder="Certificate password"
+        placeholderTextColor={theme.colors.foregroundMuted}
+        style={styles.input}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
+        editable={editable}
+        returnKeyType="done"
+      />
+      <View style={styles.certificateActions}>
+        <Button
+          variant="secondary"
+          onPress={onImport}
+          disabled={disabled}
+          testID="direct-mtls-import"
+        >
+          {importedMtlsIdentity ? "Replace .p12" : "Import .p12"}
+        </Button>
+        {importedMtlsIdentity ? (
+          <Button
+            variant="secondary"
+            onPress={onRemove}
+            disabled={disabled}
+            testID="direct-mtls-remove"
+          >
+            Remove certificate
+          </Button>
+        ) : null}
+      </View>
+      {importedMtlsIdentity ? (
+        <View style={styles.certificateCard}>
+          <Text style={styles.certificateTitle}>Imported certificate</Text>
+          {importedMtlsIdentity.displayName ? (
+            <Text style={styles.certificateDetail}>{importedMtlsIdentity.displayName}</Text>
+          ) : null}
+          {importedMtlsIdentity.subjectSummary ? (
+            <Text style={styles.certificateDetail}>{importedMtlsIdentity.subjectSummary}</Text>
+          ) : null}
+          {importedMtlsIdentity.expiresAt ? (
+            <Text style={styles.certificateDetail}>Expires {importedMtlsIdentity.expiresAt}</Text>
+          ) : null}
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+interface MtlsCertificateSectionProps {
+  theme: ReturnType<typeof useUnistyles>["theme"];
+  useMtls: boolean;
+  disabled: boolean;
+  onToggleUseMtls: () => void;
+  pkcs12Password: string;
+  onChangePkcs12Password: (value: string) => void;
+  inputResetKey: number;
+  editable: boolean;
+  importedMtlsIdentity: MtlsIdentityMetadata | null;
+  onImport: () => void;
+  onRemove: () => void;
+}
+
+function MtlsCertificateSection({
+  theme,
+  useMtls,
+  disabled,
+  onToggleUseMtls,
+  pkcs12Password,
+  onChangePkcs12Password,
+  inputResetKey,
+  editable,
+  importedMtlsIdentity,
+  onImport,
+  onRemove,
+}: MtlsCertificateSectionProps) {
+  const accessibilityState = useMemo(() => ({ checked: useMtls, disabled }), [useMtls, disabled]);
+
+  return (
+    <View style={styles.field}>
+      <Pressable
+        style={styles.checkboxRow}
+        onPress={onToggleUseMtls}
+        disabled={disabled}
+        accessibilityRole="checkbox"
+        accessibilityLabel="Use client certificate"
+        accessibilityState={accessibilityState}
+        testID="direct-mtls-toggle"
+      >
+        <View style={[styles.checkbox, useMtls ? styles.checkboxChecked : null]}>
+          {useMtls ? <Check size={14} color={theme.colors.accentForeground} /> : null}
+        </View>
+        <Text style={styles.label}>Use client certificate</Text>
+      </Pressable>
+      {useMtls ? (
+        <MtlsCertificateFields
+          theme={theme}
+          pkcs12Password={pkcs12Password}
+          onChangePkcs12Password={onChangePkcs12Password}
+          inputResetKey={inputResetKey}
+          editable={editable}
+          disabled={disabled}
+          importedMtlsIdentity={importedMtlsIdentity}
+          onImport={onImport}
+          onRemove={onRemove}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 export interface AddHostModalProps {
   visible: boolean;
   onClose: () => void;
@@ -344,7 +519,9 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [useMtls, setUseMtls] = useState(false);
   const [pkcs12Password, setPkcs12Password] = useState("");
-  const [importedMtlsIdentity, setImportedMtlsIdentity] = useState<MtlsIdentityMetadata | null>(null);
+  const [importedMtlsIdentity, setImportedMtlsIdentity] = useState<MtlsIdentityMetadata | null>(
+    null,
+  );
   const [isImportingCertificate, setIsImportingCertificate] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [advancedUri, setAdvancedUri] = useState("");
@@ -456,16 +633,14 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
       return;
     }
 
-    if (useMtls && !isMtlsUiAvailable) {
-      setErrorMessage("Client certificates are only available in the iOS app.");
-      return;
-    }
-    if (useMtls && !useTls) {
-      setErrorMessage("Client certificates require TLS.");
-      return;
-    }
-    if (useMtls && !importedMtlsIdentity) {
-      setErrorMessage("Import a .p12 or .pfx client certificate before connecting.");
+    const mtlsSelectionError = validateMtlsSelection({
+      useMtls,
+      useTls,
+      isMtlsUiAvailable,
+      importedMtlsIdentity,
+    });
+    if (mtlsSelectionError) {
+      setErrorMessage(mtlsSelectionError);
       return;
     }
 
@@ -493,16 +668,7 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
         error,
         labels: directConnectionLabels,
       });
-      let combined: string;
-      if (rawDetail && detail && rawDetail !== detail) {
-        combined = `${title}\n${detail}\n${t("pairing.direct.errors.details", {
-          detail: rawDetail,
-        })}`;
-      } else if (detail) {
-        combined = `${title}\n${detail}`;
-      } else {
-        combined = title;
-      }
+      const combined = combineConnectionFailureMessage(title, detail, rawDetail, t);
       setErrorMessage(combined);
       if (!isMobile) {
         Alert.alert(t("pairing.direct.errors.failedTitle"), combined);
@@ -606,7 +772,9 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
       setImportedMtlsIdentity(identity);
       setUseMtls(true);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to import the client certificate.");
+      setErrorMessage(
+        error instanceof Error ? error.message : "Unable to import the client certificate.",
+      );
     } finally {
       setIsImportingCertificate(false);
     }
@@ -631,9 +799,19 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
     try {
       await deleteMtlsIdentity(identityId);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to remove the client certificate.");
+      setErrorMessage(
+        error instanceof Error ? error.message : "Unable to remove the client certificate.",
+      );
     }
   }, [importedMtlsIdentity, isImportingCertificate, isSaving]);
+
+  const handleImportMtlsCertificatePress = useCallback(() => {
+    void handleImportMtlsCertificate();
+  }, [handleImportMtlsCertificate]);
+
+  const handleRemoveMtlsCertificatePress = useCallback(() => {
+    void handleRemoveMtlsCertificate();
+  }, [handleRemoveMtlsCertificate]);
 
   const handleToggleAdvanced = useCallback(() => {
     if (!isAdvancedOpen) {
@@ -777,84 +955,19 @@ export function AddHostModal({ visible, onClose, onCancel, onSaved }: AddHostMod
       </View>
 
       {useTls && isMtlsUiAvailable ? (
-        <View style={styles.field}>
-          <Pressable
-            style={styles.checkboxRow}
-            onPress={handleToggleUseMtls}
-            disabled={isSaving || isImportingCertificate}
-            accessibilityRole="checkbox"
-            accessibilityLabel="Use client certificate"
-            accessibilityState={{ checked: useMtls, disabled: isSaving || isImportingCertificate }}
-            testID="direct-mtls-toggle"
-          >
-            <View style={[styles.checkbox, useMtls ? styles.checkboxChecked : null]}>
-              {useMtls ? <Check size={14} color={theme.colors.accentForeground} /> : null}
-            </View>
-            <Text style={styles.label}>Use client certificate</Text>
-          </Pressable>
-          {useMtls ? (
-            <>
-              <Text style={styles.helper}>
-                Import a PKCS#12 (.p12 or .pfx) client certificate for mutual TLS.
-              </Text>
-              <AdaptiveTextInput
-                testID="direct-mtls-password-input"
-                nativeID="direct-mtls-password-input"
-                accessibilityLabel="Certificate password"
-                initialValue={pkcs12Password}
-                resetKey={`direct-mtls-password-${inputResetKey}`}
-                value={pkcs12Password}
-                onChangeText={setPkcs12Password}
-                placeholder="Certificate password"
-                placeholderTextColor={theme.colors.foregroundMuted}
-                style={styles.input}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry
-                editable={!isSaving && !isImportingCertificate}
-                returnKeyType="done"
-              />
-              <View style={styles.certificateActions}>
-                <Button
-                  variant="secondary"
-                  onPress={() => {
-                    void handleImportMtlsCertificate();
-                  }}
-                  disabled={isSaving || isImportingCertificate}
-                  testID="direct-mtls-import"
-                >
-                  {importedMtlsIdentity ? "Replace .p12" : "Import .p12"}
-                </Button>
-                {importedMtlsIdentity ? (
-                  <Button
-                    variant="secondary"
-                    onPress={() => {
-                      void handleRemoveMtlsCertificate();
-                    }}
-                    disabled={isSaving || isImportingCertificate}
-                    testID="direct-mtls-remove"
-                  >
-                    Remove certificate
-                  </Button>
-                ) : null}
-              </View>
-              {importedMtlsIdentity ? (
-                <View style={styles.certificateCard}>
-                  <Text style={styles.certificateTitle}>Imported certificate</Text>
-                  {importedMtlsIdentity.displayName ? (
-                    <Text style={styles.certificateDetail}>{importedMtlsIdentity.displayName}</Text>
-                  ) : null}
-                  {importedMtlsIdentity.subjectSummary ? (
-                    <Text style={styles.certificateDetail}>{importedMtlsIdentity.subjectSummary}</Text>
-                  ) : null}
-                  {importedMtlsIdentity.expiresAt ? (
-                    <Text style={styles.certificateDetail}>Expires {importedMtlsIdentity.expiresAt}</Text>
-                  ) : null}
-                </View>
-              ) : null}
-            </>
-          ) : null}
-        </View>
+        <MtlsCertificateSection
+          theme={theme}
+          useMtls={useMtls}
+          disabled={isSaving || isImportingCertificate}
+          onToggleUseMtls={handleToggleUseMtls}
+          pkcs12Password={pkcs12Password}
+          onChangePkcs12Password={setPkcs12Password}
+          inputResetKey={inputResetKey}
+          editable={!isSaving && !isImportingCertificate}
+          importedMtlsIdentity={importedMtlsIdentity}
+          onImport={handleImportMtlsCertificatePress}
+          onRemove={handleRemoveMtlsCertificatePress}
+        />
       ) : null}
 
       <View style={styles.field}>

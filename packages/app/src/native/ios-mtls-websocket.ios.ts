@@ -1,8 +1,5 @@
 import { Buffer } from "buffer";
-import {
-  requireOptionalNativeModule,
-  type EventSubscription,
-} from "expo-modules-core";
+import { requireOptionalNativeModule, type EventSubscription } from "expo-modules-core";
 import type { DirectTcpMtlsConfig } from "@getpaseo/protocol/host-connection-schema";
 
 export interface MtlsIdentityMetadata extends DirectTcpMtlsConfig {}
@@ -53,7 +50,11 @@ interface NativeMtlsIdentityMetadata {
 }
 
 interface PaseoMtlsWebSocketModule {
-  importPkcs12(base64: string, password: string, fileName?: string): Promise<NativeMtlsIdentityMetadata>;
+  importPkcs12(
+    base64: string,
+    password: string,
+    fileName?: string,
+  ): Promise<NativeMtlsIdentityMetadata>;
   deleteIdentity(identityId: string): Promise<void>;
   getIdentityMetadata(identityId: string): Promise<NativeMtlsIdentityMetadata | null>;
   connect(
@@ -66,13 +67,22 @@ interface PaseoMtlsWebSocketModule {
   sendString(socketId: string, data: string): Promise<void>;
   sendBinary(socketId: string, base64: string): Promise<void>;
   close(socketId: string, code?: number, reason?: string): Promise<void>;
-  addListener(eventName: "onSocketOpen", handler: (event: MtlsSocketOpenEvent) => void): EventSubscription;
+  addListener(
+    eventName: "onSocketOpen",
+    handler: (event: MtlsSocketOpenEvent) => void,
+  ): EventSubscription;
   addListener(
     eventName: "onSocketMessage",
     handler: (event: MtlsSocketMessageEvent) => void,
   ): EventSubscription;
-  addListener(eventName: "onSocketClose", handler: (event: MtlsSocketCloseEvent) => void): EventSubscription;
-  addListener(eventName: "onSocketError", handler: (event: MtlsSocketErrorEvent) => void): EventSubscription;
+  addListener(
+    eventName: "onSocketClose",
+    handler: (event: MtlsSocketCloseEvent) => void,
+  ): EventSubscription;
+  addListener(
+    eventName: "onSocketError",
+    handler: (event: MtlsSocketErrorEvent) => void,
+  ): EventSubscription;
 }
 
 const module = requireOptionalNativeModule<PaseoMtlsWebSocketModule>("PaseoMtlsWebSocket");
@@ -88,7 +98,9 @@ export function isMtlsWebSocketAvailable(): boolean {
   return module !== null;
 }
 
-export async function importMtlsPkcs12Identity(input: MtlsPkcs12ImportInput): Promise<MtlsIdentityMetadata> {
+export async function importMtlsPkcs12Identity(
+  input: MtlsPkcs12ImportInput,
+): Promise<MtlsIdentityMetadata> {
   const payload = await requireModule().importPkcs12(
     Buffer.from(input.bytes).toString("base64"),
     input.password,
@@ -101,7 +113,9 @@ export async function deleteMtlsIdentity(identityId: string): Promise<void> {
   await requireModule().deleteIdentity(identityId);
 }
 
-export async function getMtlsIdentityMetadata(identityId: string): Promise<MtlsIdentityMetadata | null> {
+export async function getMtlsIdentityMetadata(
+  identityId: string,
+): Promise<MtlsIdentityMetadata | null> {
   return await requireModule().getIdentityMetadata(identityId);
 }
 
@@ -123,11 +137,17 @@ export async function sendMtlsSocketBinary(socketId: string, base64: string): Pr
   await requireModule().sendBinary(socketId, base64);
 }
 
-export async function closeMtlsSocket(socketId: string, code?: number, reason?: string): Promise<void> {
+export async function closeMtlsSocket(
+  socketId: string,
+  code?: number,
+  reason?: string,
+): Promise<void> {
   await requireModule().close(socketId, code, reason);
 }
 
-export function addMtlsSocketOpenListener(handler: (event: MtlsSocketOpenEvent) => void): EventSubscription {
+export function addMtlsSocketOpenListener(
+  handler: (event: MtlsSocketOpenEvent) => void,
+): EventSubscription {
   return requireModule().addListener("onSocketOpen", handler);
 }
 
