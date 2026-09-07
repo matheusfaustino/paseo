@@ -39,6 +39,7 @@ import {
   Image as ImageIcon,
   ClipboardPaste,
   Paperclip,
+  Camera,
 } from "lucide-react-native";
 import * as Clipboard from "expo-clipboard";
 import { FOOTER_HEIGHT, MAX_CONTENT_WIDTH } from "@/constants/layout";
@@ -118,7 +119,7 @@ import { ComposerKeyboardScopeProvider, useComposerKeyboardScope } from "@/compo
 import { useAppSettings } from "@/hooks/use-settings";
 import { RenderProfile } from "@/utils/render-profiler";
 import { AfterPaintPublication } from "@/composer/after-paint-publication";
-import { isWeb, isNative } from "@/constants/platform";
+import { isWeb, isNative, getIsElectron } from "@/constants/platform";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
 import type {
   AttachmentMetadata,
@@ -1469,7 +1470,37 @@ function ComposerContentImpl({
     [blurOnSubmit, clearDraft, replaceUserInput, resetSuppression, setSelectedAttachments],
   );
 
-  const { pickImages } = useImageAttachmentPicker();
+  const autocomplete = useAgentAutocomplete({
+    userInput,
+    cursorIndex,
+    setUserInput: replaceUserInput,
+    serverId,
+    agentId,
+    draftConfig: commandDraftConfig,
+    canExecuteClientSlashCommand: buildOutgoingAttachments(attachments).length === 0,
+    onClientSlashCommand: runClientSlashCommand,
+    pluginClientSlashCommands,
+    onAutocompleteApplied: () => {
+      messageInputRef.current?.focus();
+    },
+  });
+  const autocompleteOnKeyPressRef = useRef(autocomplete.onKeyPress);
+  autocompleteOnKeyPressRef.current = autocomplete.onKeyPress;
+  const selectAutocompleteOption = autocomplete.onSelectOption;
+  const handleAutocompleteSelect = useCallback(
+    (option: AutocompleteOption) =>
+      selectAutocompleteOption(option, messageInputRef.current?.getInputSnapshot()),
+    [selectAutocompleteOption],
+  );
+
+  // Clear send error when user edits the input
+  useEffect(() => {
+    setCursorIndex((current) => Math.min(current, userInput.length));
+  }, [userInput.length]);
+
+  useEffect(() => () => cursorPublication.cancel(), [cursorPublication]);
+
+  const { pickImages, takePhoto } = useImageAttachmentPicker();
   const { pickFiles } = useFilePicker();
   const agentIdRef = useRef(agentId);
   const sendAgentMessageRef = useRef<
@@ -1747,6 +1778,15 @@ function ComposerContentImpl({
     if (newImages.length === 0) return;
     addImages(newImages);
   }, [addImages, pickImages]);
+
+  const handleTakePhoto = useCallback(async () => {
+    const newImages = await pickAndPersistImages({
+      pickImages: takePhoto,
+      persister: composerImageAttachmentPersister,
+    });
+    if (newImages.length === 0) return;
+    addImages(newImages);
+  }, [addImages, takePhoto]);
 
   const handlePasteImage = useCallback(async () => {
     try {
@@ -2162,6 +2202,16 @@ function ComposerContentImpl({
         },
       },
     ];
+    if (!getIsElectron()) {
+      items.push({
+        id: "take-photo",
+        label: t("composer.attachments.takePhoto"),
+        icon: <ThemedCamera size={ICON_SIZE.md} uniProps={iconForegroundMutedMapping} />,
+        onSelect: () => {
+          void handleTakePhoto();
+        },
+      });
+    }
     if (isNative) {
       items.push({
         id: "paste-image",
@@ -2199,6 +2249,7 @@ function ComposerContentImpl({
     handlePasteImage,
     handlePickFile,
     handlePickImage,
+    handleTakePhoto,
     pluginAttachments.menuItems,
     t,
   ]);
@@ -2658,6 +2709,7 @@ const ThemedAudioLines = withUnistyles(AudioLines);
 const ThemedPaperclip = withUnistyles(Paperclip);
 const ThemedImageIcon = withUnistyles(ImageIcon);
 const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
+const ThemedCamera = withUnistyles(Camera);
 const ThemedFileText = withUnistyles(FileText);
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const iconForegroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
