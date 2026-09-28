@@ -1,5 +1,4 @@
 import { useCallback, useRef } from "react";
-import { Alert } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useTranslation } from "react-i18next";
 import { getDesktopHost, isElectronRuntime } from "@/desktop/host";
@@ -19,9 +18,8 @@ function usePermissionGate(
   permission: ImagePicker.PermissionResponse | null,
   requestPermission: () => Promise<ImagePicker.PermissionResponse>,
   errorMessage: string,
+  onError: (message: string) => void,
 ) {
-  const { t } = useTranslation();
-
   return useCallback(async () => {
     let currentPermission = permission;
 
@@ -35,15 +33,17 @@ function usePermissionGate(
     }
 
     if (!currentPermission?.granted) {
-      Alert.alert(t("imageAttachmentPicker.permissionTitle"), errorMessage);
+      onError(errorMessage);
       return false;
     }
 
     return true;
-  }, [permission, requestPermission, errorMessage, t]);
+  }, [permission, requestPermission, errorMessage, onError]);
 }
 
-export function useImageAttachmentPicker(): UseImageAttachmentPickerResult {
+export function useImageAttachmentPicker(
+  onError: (message: string) => void,
+): UseImageAttachmentPickerResult {
   const { t } = useTranslation();
   const [mediaPermission, requestMediaPermission] = ImagePicker.useMediaLibraryPermissions();
   const [cameraPermission, requestCameraPermission] = ImagePicker.useCameraPermissions();
@@ -53,11 +53,13 @@ export function useImageAttachmentPicker(): UseImageAttachmentPickerResult {
     mediaPermission,
     requestMediaPermission,
     t("imageAttachmentPicker.permissionMessage"),
+    onError,
   );
   const ensureCameraPermission = usePermissionGate(
     cameraPermission,
     requestCameraPermission,
     t("imageAttachmentPicker.cameraPermissionMessage"),
+    onError,
   );
 
   const pickImages = useCallback(async () => {
@@ -99,12 +101,12 @@ export function useImageAttachmentPicker(): UseImageAttachmentPickerResult {
       return await normalizePickedImageAssets(result.assets);
     } catch (error) {
       console.error("[ImageAttachmentPicker] Failed to pick image:", error);
-      Alert.alert(t("imageAttachmentPicker.errorTitle"), t("imageAttachmentPicker.failedToSelect"));
+      onError(t("imageAttachmentPicker.failedToSelect"));
       return null;
     } finally {
       isPickingRef.current = false;
     }
-  }, [ensurePermission, t]);
+  }, [ensurePermission, onError, t]);
 
   const takePhoto = useCallback(async () => {
     if (isPickingRef.current) {
@@ -131,15 +133,12 @@ export function useImageAttachmentPicker(): UseImageAttachmentPickerResult {
       return await normalizePickedImageAssets(result.assets);
     } catch (error) {
       console.error("[ImageAttachmentPicker] Failed to take photo:", error);
-      Alert.alert(
-        t("imageAttachmentPicker.errorTitle"),
-        t("imageAttachmentPicker.failedToCapture"),
-      );
+      onError(t("imageAttachmentPicker.failedToCapture"));
       return null;
     } finally {
       isPickingRef.current = false;
     }
-  }, [ensureCameraPermission, t]);
+  }, [ensureCameraPermission, onError, t]);
 
   return { pickImages, takePhoto };
 }

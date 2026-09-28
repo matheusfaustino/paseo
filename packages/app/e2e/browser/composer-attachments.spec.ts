@@ -93,7 +93,10 @@ test.describe("Composer attachments", () => {
     await expect(page.getByTestId("message-input-attachment-menu-item-github")).toBeVisible();
   });
 
-  test("captured photo renders as an image attachment", async ({ page, withWorkspace }) => {
+  test("captured photos render as image attachments and can be removed", async ({
+    page,
+    withWorkspace,
+  }) => {
     test.setTimeout(60_000);
     const workspace = await withWorkspace({ prefix: "attach-camera-" });
     await workspace.navigateTo();
@@ -101,8 +104,16 @@ test.describe("Composer attachments", () => {
     await expectComposerVisible(page);
 
     await takePhotoFromMenu(page, TEST_IMAGE);
-
     await expectAttachmentPill(page, "composer-image-attachment-pill");
+
+    await takePhotoFromMenu(page, TEST_IMAGE);
+    await expect(page.getByTestId("composer-image-attachment-pill")).toHaveCount(2);
+
+    await removeAttachmentPill(page, "composer-image-attachment-pill", "Remove image attachment");
+    await expect(page.getByTestId("composer-image-attachment-pill")).toHaveCount(1);
+
+    await removeAttachmentPill(page, "composer-image-attachment-pill", "Remove image attachment");
+    await expect(page.getByTestId("composer-image-attachment-pill")).toHaveCount(0);
   });
 
   test("compact Plus menu aligns attachment rows with its sheet title", async ({

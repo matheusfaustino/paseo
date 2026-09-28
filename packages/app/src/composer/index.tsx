@@ -1470,37 +1470,11 @@ function ComposerContentImpl({
     [blurOnSubmit, clearDraft, replaceUserInput, resetSuppression, setSelectedAttachments],
   );
 
-  const autocomplete = useAgentAutocomplete({
-    userInput,
-    cursorIndex,
-    setUserInput: replaceUserInput,
-    serverId,
-    agentId,
-    draftConfig: commandDraftConfig,
-    canExecuteClientSlashCommand: buildOutgoingAttachments(attachments).length === 0,
-    onClientSlashCommand: runClientSlashCommand,
-    pluginClientSlashCommands,
-    onAutocompleteApplied: () => {
-      messageInputRef.current?.focus();
-    },
-  });
-  const autocompleteOnKeyPressRef = useRef(autocomplete.onKeyPress);
-  autocompleteOnKeyPressRef.current = autocomplete.onKeyPress;
-  const selectAutocompleteOption = autocomplete.onSelectOption;
-  const handleAutocompleteSelect = useCallback(
-    (option: AutocompleteOption) =>
-      selectAutocompleteOption(option, messageInputRef.current?.getInputSnapshot()),
-    [selectAutocompleteOption],
-  );
-
-  // Clear send error when user edits the input
-  useEffect(() => {
-    setCursorIndex((current) => Math.min(current, userInput.length));
-  }, [userInput.length]);
-
   useEffect(() => () => cursorPublication.cancel(), [cursorPublication]);
 
-  const { pickImages, takePhoto } = useImageAttachmentPicker();
+  const { pickImages, takePhoto } = useImageAttachmentPicker((message) =>
+    toastErrorRef.current(message),
+  );
   const { pickFiles } = useFilePicker();
   const agentIdRef = useRef(agentId);
   const sendAgentMessageRef = useRef<
