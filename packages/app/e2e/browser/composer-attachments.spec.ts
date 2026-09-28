@@ -7,6 +7,7 @@ import {
   expectAttachmentSheetRowsOnTitleRail,
   openGithubPickerFromMenu,
   attachImageFromMenu,
+  takePhotoFromMenu,
   expectAttachmentPill,
   removeAttachmentPill,
   openImageLightbox,
@@ -76,6 +77,32 @@ test.describe("Composer attachments", () => {
     await expect(pending).toHaveCount(0);
     await expect(page.getByTestId("composer-file-attachment-pill")).toContainText(TEST_JSON.name);
     await expectComposerEditable(page);
+  });
+
+  test("Plus menu shows image, camera, and GitHub options", async ({ page, withWorkspace }) => {
+    test.setTimeout(60_000);
+    const workspace = await withWorkspace({ prefix: "attach-plus-" });
+    await workspace.navigateTo();
+    await clickNewChat(page);
+    await expectComposerVisible(page);
+
+    await openAttachmentMenu(page);
+
+    await expect(page.getByTestId("message-input-attachment-menu-item-image")).toBeVisible();
+    await expect(page.getByTestId("message-input-attachment-menu-item-take-photo")).toBeVisible();
+    await expect(page.getByTestId("message-input-attachment-menu-item-github")).toBeVisible();
+  });
+
+  test("captured photo renders as an image attachment", async ({ page, withWorkspace }) => {
+    test.setTimeout(60_000);
+    const workspace = await withWorkspace({ prefix: "attach-camera-" });
+    await workspace.navigateTo();
+    await clickNewChat(page);
+    await expectComposerVisible(page);
+
+    await takePhotoFromMenu(page, TEST_IMAGE);
+
+    await expectAttachmentPill(page, "composer-image-attachment-pill");
   });
 
   test("compact Plus menu aligns attachment rows with its sheet title", async ({

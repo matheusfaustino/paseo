@@ -131,6 +131,17 @@ export async function attachImageFromMenu(
   await chooser.setFiles([file]);
 }
 
+export async function takePhotoFromMenu(
+  page: Page,
+  file: { name: string; mimeType: string; buffer: Buffer },
+): Promise<void> {
+  const chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 });
+  await openAttachmentMenu(page);
+  await page.getByTestId("message-input-attachment-menu-item-take-photo").click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles([file]);
+}
+
 export async function expectAttachmentPill(page: Page, testID: string): Promise<void> {
   await expect(page.getByTestId(testID).first()).toBeVisible({ timeout: 10_000 });
 }
