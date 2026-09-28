@@ -1470,8 +1470,6 @@ function ComposerContentImpl({
     [blurOnSubmit, clearDraft, replaceUserInput, resetSuppression, setSelectedAttachments],
   );
 
-  useEffect(() => () => cursorPublication.cancel(), [cursorPublication]);
-
   const { pickImages, takePhoto } = useImageAttachmentPicker((message) =>
     toastErrorRef.current(message),
   );
